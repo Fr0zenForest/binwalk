@@ -1,0 +1,146 @@
+name: Build Binwalk for Windows
+
+on:
+  workflow_dispatch:  # 允许手动触发
+  push:
+    branches: [ master, main ]
+    paths:
+      - 'src/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/build-windows.yml'
+  pull_request:
+    branches: [ master, main ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Rust 工具链
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          target: x86_64-pc-windows-msvc
+          override: true
+          components: rustfmt, clippy
+
+      - name: 缓存 Cargo 依赖
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: 检查代码格式
+        run: cargo fmt --all -- --check
+
+      - name: 运行 Clippy 检查
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: 运行测试
+        run: cargo test --verbose
+
+      - name: 编译 Release 版本
+        run: cargo build --release --verbose
+
+      - name: 验证可执行文件
+        run: |
+          if (Test-Path "target/release/binwalk.exe") {
+            Write-Host "✅ binwalk.exe 编译成功"
+            Get-Item "target/release/binwalk.exe" | Select-Object Name, Length, LastWriteTime
+            ./target/release/binwalk.exe --version
+          } else {
+            Write-Host "❌ binwalk.exe 未找到"
+            exit 1
+          }
+
+      - name: 创建发布包
+        run: |
+          New-Item -ItemType Directory -Force -Path "release"
+          Copy-Item "target/release/binwalk.exe" -Destination "release/"
+          Copy-Item "README.md" -Destination "release/"
+          Copy-Item "LICENSE" -Destination "release/"
+          
+          # 创建版本信息文件
+          $version = ./target/release/binwalk.exe --version
+          $buildDate = Get-Date -Format "yyyy-MM-dd HH:mm:ss UTC"
+          $buildInfo = @"
+Binwalk Windows Build Information
+================================
+Version: $version
+Build Date: $buildDate
+Platform: Windows x64
+Commit: ${{ github.sha }}
+"@
+          $buildInfo | Out-File -FilePath "release/BUILD_INFO.txt" -Encoding UTF8
+
+      - name: 上传编译产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: binwalk-windows-x64
+          path: release/
+          retention-days: 30
+
+      - name: 创建 Release（仅在 tag 推送时）
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            release/binwalk.exe
+            release/BUILD_INFO.txt
+          name: Binwalk Windows Build ${{ github.ref_name }}
+          body: |
+            ## Binwalk Windows 构建版本 ${{ github.ref_name }}
+            
+            ### 下载说明
+            - `binwalk.exe` - Windows x64 可执行文件
+            - `BUILD_INFO.txt` - 构建信息
+            
+            ### 使用方法
+            1. 下载 `binwalk.exe`
+            2. 在 PowerShell 或 CMD 中运行：`binwalk.exe --help`
+            
+            ### 系统要求
+            - Windows 10/11 x64
+            - 无需额外依赖
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # 可选：交叉编译其他 Windows 架构
+  build-windows-arm64:
+    runs-on: windows-latest
+    if: github.event_name == 'workflow_dispatch'  # 仅手动触发时编译 ARM64
+    
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Rust 工具链
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          target: aarch64-pc-windows-msvc
+          override: true
+
+      - name: 编译 ARM64 版本
+        run: cargo build --release --target aarch64-pc-windows-msvc
+
+      - name: 上传 ARM64 编译产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: binwalk-windows-arm64
+          path: target/aarch64-pc-windows-msvc/release/binwalk.exe
+          retention-days: 30 
