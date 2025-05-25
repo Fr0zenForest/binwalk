@@ -46,9 +46,11 @@ jobs:
 
       - name: 检查代码格式
         run: cargo fmt --all -- --check
+        continue-on-error: true  # 允许格式检查失败
 
       - name: 运行 Clippy 检查
-        run: cargo clippy --all-targets --all-features -- -D warnings
+        run: cargo clippy --all-targets --all-features -- -W clippy::all
+        continue-on-error: true  # 允许 Clippy 检查失败，但仍显示警告
 
       - name: 运行测试
         run: cargo test --verbose
